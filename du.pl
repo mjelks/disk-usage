@@ -1,10 +1,18 @@
 #!/usr/bin/perl -w
 
-###############################################################################
+##############################################################################
 #
 #	File:			disk_usage.pl
 #
-#	Function:		
+#	Function:		Traverse a Directory and get the disk usage of 
+#					items in the folder(s)
+#					additional functionality : 
+#						threshold (only show items > threshold val)
+#						recurse from initial directory to show grand-total 
+#						(TODO)
+#
+# 					the syntax is : 
+#					./du.pl [directory] -t=[threshold value]  -r
 #
 #	Author(s):		Michael Jelks
 #
@@ -20,14 +28,13 @@
 #			
 #	
 ##############################################################################
+use strict; 
 
 #Unbuffers output- good for nph-scripts
 $| = 1;
-use strict; 
-# the syntax is : ./disk_usage.pl [directory] -t=[threshold value]  
 
 my $output;
-my ($list, @total_list);
+my @total_list;
 my $dir = $ARGV[0];
 my $threshold = 0;
 my $subtotal = 0;
@@ -37,46 +44,35 @@ my $total = 0;
 system "clear";
 
 #exit program if they don't enter a [valid] directory
-if (!$dir) { print "You need to supply a directory before we can process the folders\n"; exit; }
-if (!-d $dir) { print "\"$dir\" is not a valid directory - check to make sure it exists\n"; exit; }
+if (!$dir) { 
+	print "You need to supply a directory before we can process the folders\n"; 
+	exit; }
 
-#if ($dir !~ /\/$/) { print "pre-dir manip: $dir\n"; $dir =~ s/(.+)/$1\//; print "post-dir manip: $dir\n"; exit; }
+if (!-d $dir) {
+	print "\"$dir\" is not a valid directory - check to make sure it exists\n"; 
+	exit; }
+
 #this adds a trailing slash - needed for du -ks later on...
-if ($dir !~ /\/$/) {  $dir =~ s/(.+)/$1\//; }
+if ($dir !~ /\/$/) {
+	$dir =~ s/(.+)/$1\//; }
 
-#add threshold values if -t argument exists - otherwise use initialized value up top
-if ($ARGV[1]) 
-{  
+# add threshold values if -t argument exists - 
+# otherwise use initialized value up top
+if ($ARGV[1]) {  
 	$threshold = $ARGV[1];
 	$threshold =~ s/-t=(.+)/$1/;
-	print "Checking for values >= " .$threshold."MB\n";
-}
+	print "Checking for values >= " .$threshold."MB\n"; }
 
-#process the header
-$total_list[0] = $dir;
-&process_list(\@total_list,$total,"header");
-@total_list = ();
+&process_header;
+&process_directory($dir, \$subtotal);
 
-#first get a list of all files for the specified directory
-$output = &command_line("ls","-1F",$dir);
-$list = &parse_list($output);
-
-#then get the subtotal for any files that exceed the threshold value
-foreach (@$list) 
-{
-	$output = &command_line("du", "-ks" , "\"" . $dir .  $_ . "\"");
-	my $list2 = &parse_list($output);
-	
-	$subtotal = &process_list($list2,$subtotal,"");
-}
-
-#process the subtotal (only if threshold specified)
+# init the process by priming the @total_list array 
+# with the $dir input via ARGV
 $total_list[0] = $dir;
 &process_list(\@total_list,$subtotal,"subtotal");
 
-@total_list = ();
-
 #then get the grand total for the entire directory
+@total_list = ();
 $output = &command_line("du", "-ks" , "\"" . $dir . "\"");
 push(@total_list,$output);
 $total = &process_list(\@total_list,$total,"total");
@@ -85,14 +81,13 @@ print "\n\n\n";
 
 exit;
 
-###############################################################################
+##############################################################################
 # 
 #	SUBS
 #
-###############################################################################
+##############################################################################
 
-sub command_line
-{
+sub command_line {
 	my ($command, $argument, $parameter) = @_;
 	my $system;
 
@@ -101,8 +96,22 @@ sub command_line
 	return $system;
 }
 
-sub parse_list
-{
+sub process_directory {
+	my ($dir, $subtotal) = @_;
+	#first get a list of all files for the specified directory
+	my $output = &command_line("ls","-1F",$dir);
+	my $list = &parse_list($output);
+	my $list_tmp;
+
+	#then get the subtotal for any files that exceed the threshold value
+	foreach my $item (@$list) {
+		$output = &command_line("du", "-ks" , "\"" . $dir .  $item . "\"");
+		$list_tmp = &parse_list($output);
+		$subtotal = &process_list($list_tmp,$subtotal,"");
+	}
+}
+
+sub parse_list {
 	my $output = shift;
 	my (@list,@new_list);
 	my $listing;
@@ -124,73 +133,30 @@ sub parse_list
 	return \@new_list;
 }
 
-sub process_list
-{
+sub process_list {
 	my ($list, $total, $type) = @_;
-	my ($name, $size);
+	my ($item, $name, $size);
 
-######################## FORMATS #############################################
-#
-
-format HEADER = 
-                                 SIZE
-Path/Filename                                                      Size (in MB)	 
--------------------------------------------------------------------------------
-.
-
-format ITEMS = 
-@<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<@>>>>>>>>>>>>>>
-$name,                                                         $size
-.
-
-format FOOTER =
--------------------------------------------------------------------------------
-.
-#                                                                       
-##############################################################################
-
-
-
-	foreach (@$list)
+	foreach $item (@$list)
 	{
 		#extract the byte count and file/dir name from the list
-		if ($_ =~ /^(\d+)\s+(.+)/) 
+		if ($item =~ /^(\d+)\s+(.+)/) 
 		{ 
 			$size = $1;
 			$name = $2;
 			#format the output to 2 decimals - print only if threshold exceeded
-			$size = sprintf("%.2f", ($size/1024));  
+			$size = sprintf("%.2f", ($size/1024));
 			if ($type eq "total") 
 			{
-				&setHandle("FOOTER");
-				write;
-				&setHandle("ITEMS");
+				&process_footer;
 				$name = "Total for directory -> " . $name;
-				write;
+				&process_items($name, $size);
 			}
 			elsif ($size >= $threshold) 
 			{ 
-				&setHandle("ITEMS");
-				write;
-				#print $name ." => " . $size . "MB\n"; 
+				&process_items($name, $size);
 				$total += $size;
 			}
-		}
-		elsif ($type eq "subtotal" && $threshold > 0)
-		{
-			$size = $total;
-			$name = $_;
-			#print "$size $name";exit;
-			&setHandle("FOOTER");
-			write;
-			&setHandle("ITEMS");
-			$name = "Total for search -> " . $name . " >= $threshold MB: ";
-			write;
-		}
-		elsif ($type eq "header")
-		{
-			&setHandle("HEADER");
-			write;
 		}
 	}
 	
@@ -198,11 +164,40 @@ format FOOTER =
 	
 }
 
-sub setHandle
-{
-	my $handle = shift;
+## FORMATTING PERL CONSTRUCTS ##
+sub process_header {
+format HEADER = 
+                                 SIZE
+Path/Filename                                                     Size (in MB)	 
+------------------------------------------------------------------------------
+.
+	&setHandle("HEADER");
+	write;
+}
 
+sub process_footer {
+format FOOTER =
+-------------------------------------------------------------------------------
+.
+	&setHandle("FOOTER");
+	write;
+}
+
+sub process_items {
+	my ($name, $size) = @_;
+format ITEMS = 
+@<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<@>>>>>>>>>>>>>>
+$name,                                                         $size
+.
+	&setHandle("ITEMS");
+	write;
+}
+
+## PERL FORMATTING MAGIC ##
+sub setHandle {
+	my $handle = shift;
 	my $oldhandle = select STDOUT;
+	
 	$~ = $handle;
 	select ($oldhandle);	
 }
